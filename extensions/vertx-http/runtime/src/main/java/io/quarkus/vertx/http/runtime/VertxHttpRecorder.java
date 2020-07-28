@@ -38,7 +38,6 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.runtime.BeanContainer;
 import io.quarkus.bootstrap.runner.Timing;
-import io.quarkus.dev.spi.DevModeType;
 import io.quarkus.dev.spi.HotReplacementContext;
 import io.quarkus.netty.runtime.virtual.VirtualAddress;
 import io.quarkus.netty.runtime.virtual.VirtualChannel;
@@ -106,9 +105,6 @@ public class VertxHttpRecorder {
 
     public static final String MAX_REQUEST_SIZE_KEY = "io.quarkus.max-request-size";
 
-    // We do not use Integer.MAX on purpose to allow advanced users to register a route AFTER the default route
-    public static final int DEFAULT_ROUTE_ORDER = 10_000;
-
     private static final Logger LOGGER = Logger.getLogger(VertxHttpRecorder.class.getName());
 
     private static volatile Handler<RoutingContext> hotReplacementHandler;
@@ -164,15 +160,9 @@ public class VertxHttpRecorder {
             // the server start to fail
             hotReplacementHandler = prevHotReplacementHandler;
         }
-        Supplier<Vertx> supplier = VertxCoreRecorder.getVertx();
-        Vertx vertx;
-        if (supplier == null) {
-            VertxConfiguration vertxConfiguration = new VertxConfiguration();
-            ConfigInstantiator.handleObject(vertxConfiguration);
-            vertx = VertxCoreRecorder.initialize(vertxConfiguration, null);
-        } else {
-            vertx = supplier.get();
-        }
+        VertxConfiguration vertxConfiguration = new VertxConfiguration();
+        ConfigInstantiator.handleObject(vertxConfiguration);
+        Vertx vertx = VertxCoreRecorder.initialize(vertxConfiguration, null);
 
         try {
             HttpBuildTimeConfig buildConfig = new HttpBuildTimeConfig();
@@ -256,7 +246,7 @@ public class VertxHttpRecorder {
         }
 
         if (defaultRouteHandler != null) {
-            defaultRouteHandler.accept(router.route().order(DEFAULT_ROUTE_ORDER));
+            defaultRouteHandler.accept(router.route().order(10_000));
         }
 
         container.instance(RouterProducer.class).initialize(router);
@@ -401,8 +391,7 @@ public class VertxHttpRecorder {
                 }
             });
         }
-        if (launchMode == LaunchMode.DEVELOPMENT && liveReloadConfig.password.isPresent()
-                && hotReplacementContext.getDevModeType() == DevModeType.REMOTE_SERVER_SIDE) {
+        if (launchMode == LaunchMode.DEVELOPMENT && liveReloadConfig.password.isPresent()) {
             root = remoteSyncHandler = new RemoteSyncHandler(liveReloadConfig.password.get(), root, hotReplacementContext);
         }
         rootHandler = root;
@@ -558,7 +547,10 @@ public class VertxHttpRecorder {
             }
         }
         serverOptions.setMaxHeaderSize(httpConfiguration.limits.maxHeaderSize.asBigInteger().intValueExact());
-        serverOptions.setMaxChunkSize(httpConfiguration.limits.maxChunkSize.asBigInteger().intValueExact());
+        Optional<MemorySize> maxChunkSize = httpConfiguration.limits.maxChunkSize;
+        if (maxChunkSize.isPresent()) {
+            serverOptions.setMaxChunkSize(maxChunkSize.get().asBigInteger().intValueExact());
+        }
         setIdleTimeout(httpConfiguration, serverOptions);
 
         if (certFile.isPresent() && keyFile.isPresent()) {
@@ -631,7 +623,6 @@ public class VertxHttpRecorder {
         serverOptions.setTcpQuickAck(httpConfiguration.tcpQuickAck);
         serverOptions.setTcpCork(httpConfiguration.tcpCork);
         serverOptions.setTcpFastOpen(httpConfiguration.tcpFastOpen);
-        serverOptions.setMaxInitialLineLength(httpConfiguration.limits.maxInitialLineLength);
 
         return serverOptions;
     }
@@ -716,13 +707,15 @@ public class VertxHttpRecorder {
         options.setPort(httpConfiguration.determinePort(launchMode));
         setIdleTimeout(httpConfiguration, options);
         options.setMaxHeaderSize(httpConfiguration.limits.maxHeaderSize.asBigInteger().intValueExact());
-        options.setMaxChunkSize(httpConfiguration.limits.maxChunkSize.asBigInteger().intValueExact());
+        Optional<MemorySize> maxChunkSize = httpConfiguration.limits.maxChunkSize;
+        if (maxChunkSize.isPresent()) {
+            options.setMaxChunkSize(maxChunkSize.get().asBigInteger().intValueExact());
+        }
         options.setWebsocketSubProtocols(websocketSubProtocols);
         options.setReusePort(httpConfiguration.soReusePort);
         options.setTcpQuickAck(httpConfiguration.tcpQuickAck);
         options.setTcpCork(httpConfiguration.tcpCork);
         options.setTcpFastOpen(httpConfiguration.tcpFastOpen);
-        options.setMaxInitialLineLength(httpConfiguration.limits.maxInitialLineLength);
         return options;
     }
 
@@ -735,7 +728,10 @@ public class VertxHttpRecorder {
         options.setHost(httpConfiguration.domainSocket);
         setIdleTimeout(httpConfiguration, options);
         options.setMaxHeaderSize(httpConfiguration.limits.maxHeaderSize.asBigInteger().intValueExact());
-        options.setMaxChunkSize(httpConfiguration.limits.maxChunkSize.asBigInteger().intValueExact());
+        Optional<MemorySize> maxChunkSize = httpConfiguration.limits.maxChunkSize;
+        if (maxChunkSize.isPresent()) {
+            options.setMaxChunkSize(maxChunkSize.get().asBigInteger().intValueExact());
+        }
         options.setWebsocketSubProtocols(websocketSubProtocols);
         return options;
     }

@@ -10,10 +10,11 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
-import org.apache.maven.model.Build;
+import java.util.Set;
+import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Parent;
 import org.apache.maven.model.Resource;
@@ -27,7 +28,6 @@ public class LocalProject {
     public static final String PROJECT_GROUPID = "${project.groupId}";
 
     private static final String PROJECT_BASEDIR = "${project.basedir}";
-    private static final String PROJECT_BUILD_DIR = "${project.build.directory}";
     private static final String POM_XML = "pom.xml";
 
     private static class WorkspaceLoader {
@@ -268,17 +268,6 @@ public class LocalProject {
         this.version = resolvedVersion;
     }
 
-    public LocalProject getLocalParent() {
-        if (workspace == null) {
-            return null;
-        }
-        final Parent parent = rawModel.getParent();
-        if (parent == null) {
-            return null;
-        }
-        return workspace.getProject(parent.getGroupId(), parent.getArtifactId());
-    }
-
     public String getGroupId() {
         return groupId;
     }
@@ -296,27 +285,22 @@ public class LocalProject {
     }
 
     public Path getOutputDir() {
-        return resolveRelativeToBaseDir(configuredBuildDir(this, build -> build.getDirectory()), "target");
-    }
-
-    public Path getCodeGenOutputDir() {
-        return getOutputDir().resolve("generated-sources");
+        return dir.resolve("target");
     }
 
     public Path getClassesDir() {
-        return resolveRelativeToBuildDir(configuredBuildDir(this, build -> build.getOutputDirectory()), "classes");
+        final String classesDir = rawModel.getBuild() == null ? null : rawModel.getBuild().getOutputDirectory();
+        return resolveRelativeToBaseDir(classesDir, "target/classes");
     }
 
     public Path getTestClassesDir() {
-        return resolveRelativeToBuildDir(configuredBuildDir(this, build -> build.getTestOutputDirectory()), "test-classes");
+        final String classesDir = rawModel.getBuild() == null ? null : rawModel.getBuild().getTestOutputDirectory();
+        return resolveRelativeToBaseDir(classesDir, "target/test-classes");
     }
 
     public Path getSourcesSourcesDir() {
-        return resolveRelativeToBaseDir(configuredBuildDir(this, build -> build.getSourceDirectory()), "src/main/java");
-    }
-
-    public Path getSourcesDir() {
-        return getSourcesSourcesDir().getParent();
+        final String srcDir = rawModel.getBuild() == null ? null : rawModel.getBuild().getSourceDirectory();
+        return resolveRelativeToBaseDir(srcDir, "src/main/java");
     }
 
     public Path getResourcesSourcesDir() {
@@ -347,27 +331,48 @@ public class LocalProject {
         return new AppArtifact(groupId, artifactId, "", extension, version);
     }
 
-    private Path resolveRelativeToBaseDir(String path, String defaultPath) {
-        return dir.resolve(path == null ? defaultPath : stripProjectBasedirPrefix(path, PROJECT_BASEDIR));
-    }
-
-    private Path resolveRelativeToBuildDir(String path, String defaultPath) {
-        return getOutputDir().resolve(path == null ? defaultPath : stripProjectBasedirPrefix(path, PROJECT_BUILD_DIR));
-    }
-
-    private static String stripProjectBasedirPrefix(String path, String expr) {
-        return path.startsWith(expr) ? path.substring(expr.length() + 1) : path;
-    }
-
-    private static String configuredBuildDir(LocalProject project, Function<Build, String> f) {
-        String dir = project.rawModel.getBuild() == null ? null : f.apply(project.rawModel.getBuild());
-        while (dir == null) {
-            project = project.getLocalParent();
-            if (project == null) {
-                break;
-            }
-            dir = project.rawModel.getBuild() == null ? null : f.apply(project.rawModel.getBuild());
+    public List<LocalProject> getSelfWithLocalDeps() {
+        if (workspace == null) {
+            return Collections.singletonList(this);
         }
-        return dir;
+        final List<LocalProject> ordered = new ArrayList<>();
+        collectSelfWithLocalDeps(this, new HashSet<>(), ordered);
+        return ordered;
+    }
+
+    private static void collectSelfWithLocalDeps(LocalProject project, Set<AppArtifactKey> addedDeps,
+            List<LocalProject> ordered) {
+        if (!project.modules.isEmpty()) {
+            for (LocalProject module : project.modules) {
+                collectSelfWithLocalDeps(module, addedDeps, ordered);
+            }
+        }
+        for (Dependency dep : project.getRawModel().getDependencies()) {
+            if ("test".equals(dep.getScope())) {
+                continue;
+            }
+            final AppArtifactKey depKey = project.getKey(dep);
+            final LocalProject localDep = project.workspace.getProject(depKey);
+            if (localDep == null || addedDeps.contains(depKey)) {
+                continue;
+            }
+            collectSelfWithLocalDeps(localDep, addedDeps, ordered);
+        }
+        if (addedDeps.add(project.getKey())) {
+            ordered.add(project);
+        }
+    }
+
+    private AppArtifactKey getKey(Dependency dep) {
+        return new AppArtifactKey(PROJECT_GROUPID.equals(dep.getGroupId()) ? getGroupId() : dep.getGroupId(),
+                dep.getArtifactId());
+    }
+
+    private Path resolveRelativeToBaseDir(String path, String defaultPath) {
+        return dir.resolve(path == null ? defaultPath : stripProjectBasedirPrefix(path));
+    }
+
+    private static String stripProjectBasedirPrefix(String path) {
+        return path.startsWith(PROJECT_BASEDIR) ? path.substring(PROJECT_BASEDIR.length() + 1) : path;
     }
 }

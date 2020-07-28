@@ -46,7 +46,6 @@ public class OpenshiftWithApplicationPropertiesTest {
             assertThat(h.getMetadata()).satisfies(m -> {
                 assertThat(m.getName()).isEqualTo("test-it");
                 assertThat(m.getLabels()).contains(entry("foo", "bar"));
-                assertThat(m.getNamespace()).isEqualTo("applications");
             });
             assertThat(h).extracting("spec").extracting("replicas").isEqualTo(3);
             assertThat(h).extracting("spec").extracting("template").extracting("spec").isInstanceOfSatisfying(PodSpec.class,
@@ -60,10 +59,6 @@ public class OpenshiftWithApplicationPropertiesTest {
 
         assertThat(openshiftList).filteredOn(h -> "Service".equals(h.getKind())).hasOnlyOneElementSatisfying(h -> {
             assertThat(h).isInstanceOfSatisfying(Service.class, s -> {
-                assertThat(s.getMetadata()).satisfies(m -> {
-                    assertThat(m.getNamespace()).isEqualTo("applications");
-                });
-
                 assertThat(s.getSpec()).satisfies(spec -> {
                     assertThat(spec.getPorts()).hasSize(1).hasOnlyOneElementSatisfying(p -> {
                         assertThat(p.getPort()).isEqualTo(9090);
@@ -74,12 +69,11 @@ public class OpenshiftWithApplicationPropertiesTest {
 
         assertThat(openshiftList).filteredOn(i -> "Route".equals(i.getKind())).hasOnlyOneElementSatisfying(i -> {
             assertThat(i).isInstanceOfSatisfying(Route.class, in -> {
-                //Check that labels and annotations are also applied to Routes (#10260)
+                //Check that lables and annotations are also applied to Routes (#10260)
                 assertThat(i.getMetadata()).satisfies(m -> {
                     assertThat(m.getName()).isEqualTo("test-it");
                     assertThat(m.getLabels()).contains(entry("foo", "bar"));
                     assertThat(m.getAnnotations()).contains(entry("bar", "baz"));
-                    assertThat(m.getNamespace()).isEqualTo("applications");
                 });
             });
         });

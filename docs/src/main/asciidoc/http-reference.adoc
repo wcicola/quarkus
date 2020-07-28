@@ -184,8 +184,6 @@ not set.
 |quarkus.http.cors.exposed-headers||The comma-separated list of HTTP headers exposed in CORS.
 |quarkus.http.cors.access-control-max-age||The duration (see note below) indicating how long the results of a pre-flight request can be cached.
 This value will be returned in a `Access-Control-Max-Age` response header.
-|quarkus.http.cors.access-control-allow-credentials||Boolean value to tell the browsers to expose the response to front-end JavaScript code
-when the request’s credentials mode Request.credentials is “include”
 |===
 
 
@@ -201,12 +199,27 @@ quarkus.http.cors.methods=GET,PUT,POST
 quarkus.http.cors.headers=X-Custom
 quarkus.http.cors.exposed-headers=Content-Disposition
 quarkus.http.cors.access-control-max-age=24H
-quarkus.http.cors.access-control-allow-credentials=true
 ----
 
 == HTTP Limits Configuration
 
-include::{generated-dir}/config/quarkus-vertx-http-config-group-server-limits-config.adoc[leveloffset=+1, opts=optional]
+The following properties are supported.
+
+[cols="<m,<m,<2",options="header"]
+|===
+|Property Name|Default|Description
+|quarkus.http.limits.max-body-size| `10240K` |The maximum size of request body.
+|quarkus.http.limits.max-header-size|`20K`|The maximum length of all headers.
+|===
+
+[NOTE]
+====
+The following config options will recognize sizes expressed as strings in this format (shown as a regular expression): `[0-9]+[KkMmGgTtPpEeZzYy]?`.
+If no unit suffix is given, bytes are assumed.
+
+* `quarkus.http.limits.max-body-size`,
+* `quarkus.http.limits.max-header-size`
+====
 
 == Configuring HTTP Access Logs
 
@@ -242,7 +255,6 @@ include::{generated-dir}/config/quarkus-vertx-http-config-group-access-log-confi
 |SSL cypher                                                                   |          | `%{SSL_CIPHER}`
 |SSL client certificate                                                       |          | `%{SSL_CLIENT_CERT}`
 |SSL session id                                                               |          | `%{SSL_SESSION_ID}`
-|All request headers                                                          |          | `%{ALL_REQUEST_HEADERS}`
 |Cookie value                                                                 |          | `%{c,cookie_name}`
 |Query parameter                                                              |          | `%{q,query_param_name}`
 |Request header                                                               |          | `%{i,request_header_name}`
@@ -270,3 +282,4 @@ link:http://undertow.io/undertow-docs/undertow-docs-2.0.0/index.html#predicates-
 === web.xml
 
 If you are using a `web.xml` file as your configuration file, you can place it in the `src/main/resources/META-INF` directory.
+

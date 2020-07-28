@@ -39,6 +39,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -50,23 +51,10 @@ import org.jboss.logging.Logger;
 import io.dekorate.Session;
 import io.dekorate.SessionReader;
 import io.dekorate.SessionWriter;
-import io.dekorate.knative.decorator.ApplyGlobalAutoscalingClassDecorator;
-import io.dekorate.knative.decorator.ApplyGlobalContainerConcurrencyDecorator;
-import io.dekorate.knative.decorator.ApplyGlobalRequestsPerSecondTargetDecorator;
-import io.dekorate.knative.decorator.ApplyGlobalTargetUtilizationDecorator;
-import io.dekorate.knative.decorator.ApplyLocalAutoscalingClassDecorator;
-import io.dekorate.knative.decorator.ApplyLocalAutoscalingMetricDecorator;
-import io.dekorate.knative.decorator.ApplyLocalAutoscalingTargetDecorator;
-import io.dekorate.knative.decorator.ApplyLocalContainerConcurrencyDecorator;
-import io.dekorate.knative.decorator.ApplyLocalTargetUtilizationPercentageDecorator;
-import io.dekorate.knative.decorator.ApplyMaxScaleDecorator;
-import io.dekorate.knative.decorator.ApplyMinScaleDecorator;
 import io.dekorate.kubernetes.annotation.ImagePullPolicy;
 import io.dekorate.kubernetes.annotation.ServiceType;
 import io.dekorate.kubernetes.config.Annotation;
-import io.dekorate.kubernetes.config.Configurator;
 import io.dekorate.kubernetes.config.EnvBuilder;
-import io.dekorate.kubernetes.config.ImageConfigurationFluent;
 import io.dekorate.kubernetes.config.Label;
 import io.dekorate.kubernetes.config.LabelBuilder;
 import io.dekorate.kubernetes.config.PortBuilder;
@@ -75,8 +63,6 @@ import io.dekorate.kubernetes.decorator.AddAnnotationDecorator;
 import io.dekorate.kubernetes.decorator.AddAwsElasticBlockStoreVolumeDecorator;
 import io.dekorate.kubernetes.decorator.AddAzureDiskVolumeDecorator;
 import io.dekorate.kubernetes.decorator.AddAzureFileVolumeDecorator;
-import io.dekorate.kubernetes.decorator.AddConfigMapDataDecorator;
-import io.dekorate.kubernetes.decorator.AddConfigMapResourceProvidingDecorator;
 import io.dekorate.kubernetes.decorator.AddConfigMapVolumeDecorator;
 import io.dekorate.kubernetes.decorator.AddEnvVarDecorator;
 import io.dekorate.kubernetes.decorator.AddImagePullSecretDecorator;
@@ -104,7 +90,6 @@ import io.dekorate.project.Project;
 import io.dekorate.project.ScmInfo;
 import io.dekorate.s2i.config.S2iBuildConfig;
 import io.dekorate.s2i.config.S2iBuildConfigBuilder;
-import io.dekorate.s2i.config.S2iBuildConfigFluent;
 import io.dekorate.s2i.decorator.AddBuilderImageStreamResourceDecorator;
 import io.dekorate.utils.Annotations;
 import io.dekorate.utils.Maps;
@@ -114,12 +99,12 @@ import io.quarkus.container.spi.ContainerImageInfoBuildItem;
 import io.quarkus.container.spi.ContainerImageLabelBuildItem;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Feature;
+import io.quarkus.deployment.IsNormal;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.ApplicationInfoBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedFileSystemResourceBuildItem;
-import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.pkg.PackageConfig;
 import io.quarkus.deployment.pkg.builditem.OutputTargetBuildItem;
 import io.quarkus.deployment.util.FileUtil;
@@ -133,7 +118,6 @@ import io.quarkus.kubernetes.spi.KubernetesHealthReadinessPathBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesLabelBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesPortBuildItem;
 import io.quarkus.kubernetes.spi.KubernetesRoleBuildItem;
-import io.quarkus.runtime.LaunchMode;
 import io.quarkus.smallrye.metrics.deployment.spi.MetricsConfigurationBuildItem;
 
 class KubernetesProcessor {
@@ -245,18 +229,13 @@ class KubernetesProcessor {
     @BuildStep
     public List<KubernetesEnvBuildItem> createEnv(KubernetesConfig kubernetesConfig, OpenshiftConfig openshiftConfig,
             KnativeConfig knativeConfig) {
-
-        Collection<KubernetesEnvBuildItem> kubernetesEnvBuildItems = kubernetesConfig.convertToBuildItems();
-        List<KubernetesEnvBuildItem> items = new ArrayList<>(kubernetesEnvBuildItems);
-        for (KubernetesEnvBuildItem kubernetesEnvBuildItem : kubernetesEnvBuildItems) {
-            items.add(kubernetesEnvBuildItem.newWithTarget(MINIKUBE));
-        }
+        List<KubernetesEnvBuildItem> items = new LinkedList<>(kubernetesConfig.convertToBuildItems());
         items.addAll(openshiftConfig.convertToBuildItems());
         items.addAll(knativeConfig.convertToBuildItems());
         return items;
     }
 
-    @BuildStep
+    @BuildStep(onlyIf = IsNormal.class)
     public void build(ApplicationInfoBuildItem applicationInfo,
             OutputTargetBuildItem outputTarget,
             PackageConfig packageConfig,
@@ -264,7 +243,6 @@ class KubernetesProcessor {
             OpenshiftConfig openshiftConfig,
             KnativeConfig knativeConfig,
             Capabilities capabilities,
-            LaunchModeBuildItem launchMode,
             List<KubernetesAnnotationBuildItem> kubernetesAnnotations,
             List<KubernetesLabelBuildItem> kubernetesLabels,
             List<KubernetesEnvBuildItem> kubernetesEnvs,
@@ -277,10 +255,6 @@ class KubernetesProcessor {
             Optional<KubernetesHealthLivenessPathBuildItem> kubernetesHealthLivenessPath,
             Optional<KubernetesHealthReadinessPathBuildItem> kubernetesHealthReadinessPath,
             BuildProducer<GeneratedFileSystemResourceBuildItem> generatedResourceProducer) {
-
-        if (launchMode.getLaunchMode() == LaunchMode.TEST) {
-            return;
-        }
 
         if (kubernetesPorts.isEmpty()) {
             log.debug("The service is not an HTTP service so no Kubernetes manifests will be generated");
@@ -302,138 +276,98 @@ class KubernetesProcessor {
         Path artifactPath = outputTarget.getOutputDirectory().resolve(
                 String.format(OUTPUT_ARTIFACT_FORMAT, outputTarget.getBaseName(), packageConfig.runnerSuffix));
 
-        try {
-            final Map<String, String> generatedResourcesMap;
-            // by passing false to SimpleFileWriter, we ensure that no files are actually written during this phase
-            Project project = createProject(applicationInfo, artifactPath);
-            final SessionWriter sessionWriter = new SimpleFileWriter(project, false);
-            final SessionReader sessionReader = new SimpleFileReader(
-                    project.getRoot().resolve("src").resolve("main").resolve("kubernetes"), kubernetesDeploymentTargets
-                            .getEntriesSortedByPriority().stream()
-                            .map(DeploymentTargetEntry::getName).collect(Collectors.toSet()));
-            sessionWriter.setProject(project);
+        final Map<String, String> generatedResourcesMap;
+        // by passing false to SimpleFileWriter, we ensure that no files are actually written during this phase
+        Project project = createProject(applicationInfo, artifactPath);
+        final SessionWriter sessionWriter = new SimpleFileWriter(project, false);
+        final SessionReader sessionReader = new SimpleFileReader(
+                project.getRoot().resolve("src").resolve("main").resolve("kubernetes"), kubernetesDeploymentTargets
+                        .getEntriesSortedByPriority().stream()
+                        .map(DeploymentTargetEntry::getName).collect(Collectors.toSet()));
+        sessionWriter.setProject(project);
+        final Session session = Session.getSession(new NoopLogger());
+        session.setWriter(sessionWriter);
+        session.setReader(sessionReader);
 
-            if (launchMode.getLaunchMode() != LaunchMode.NORMAL) {
-                // needed for a fresh run
-                Session.clearSession();
+        session.feed(Maps.fromProperties(config));
+
+        //Apply configuration
+        applyGlobalConfig(session, kubernetesConfig);
+
+        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+
+        boolean needToForceUpdateImagePullPolicy = needToForceUpdateImagePullPolicy(deploymentTargets, containerImage,
+                capabilities);
+        applyConfig(session, project, KUBERNETES, getResourceName(kubernetesConfig, applicationInfo), kubernetesConfig,
+                now, determineImagePullPolicy(kubernetesConfig, needToForceUpdateImagePullPolicy));
+        applyConfig(session, project, MINIKUBE, getResourceName(kubernetesConfig, applicationInfo), kubernetesConfig,
+                now, ImagePullPolicy.IfNotPresent);
+        applyConfig(session, project, OPENSHIFT, getResourceName(openshiftConfig, applicationInfo), openshiftConfig, now,
+                determineImagePullPolicy(openshiftConfig, needToForceUpdateImagePullPolicy));
+        applyConfig(session, project, KNATIVE, getResourceName(knativeConfig, applicationInfo), knativeConfig, now,
+                determineImagePullPolicy(knativeConfig, needToForceUpdateImagePullPolicy));
+
+        applyKnativeConfig(session, project, getResourceName(knativeConfig, applicationInfo), knativeConfig);
+
+        //apply build item configurations to the dekorate session.
+        applyBuildItems(session,
+                applicationInfo,
+                kubernetesConfig,
+                openshiftConfig,
+                knativeConfig,
+                deploymentTargets,
+                kubernetesAnnotations,
+                kubernetesLabels,
+                kubernetesEnvs,
+                kubernetesRoles,
+                kubernetesPorts,
+                baseImage,
+                containerImage,
+                command,
+                kubernetesHealthLivenessPath,
+                kubernetesHealthReadinessPath);
+
+        // write the generated resources to the filesystem
+        generatedResourcesMap = session.close();
+
+        List<String> generatedFileNames = new ArrayList<>(generatedResourcesMap.size());
+        for (Map.Entry<String, String> resourceEntry : generatedResourcesMap.entrySet()) {
+            Path path = Paths.get(resourceEntry.getKey());
+            //We need to ignore the config yml
+            if (!path.toFile().getParentFile().getName().equals("dekorate")) {
+                continue;
             }
+            String fileName = path.toFile().getName();
+            Path targetPath = outputTarget.getOutputDirectory().resolve(KUBERNETES).resolve(fileName);
+            String relativePath = targetPath.toAbsolutePath().toString().replace(root.toAbsolutePath().toString(), "");
 
-            final Session session = Session.getSession(new NoopLogger());
-
-            session.setWriter(sessionWriter);
-            session.setReader(sessionReader);
-
-            session.feed(Maps.fromProperties(config));
-
-            //Apply configuration
-            applyGlobalConfig(session, kubernetesConfig);
-
-            ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
-
-            boolean needToForceUpdateImagePullPolicy = needToForceUpdateImagePullPolicy(deploymentTargets, containerImage,
-                    capabilities);
-            applyConfig(session, project, KUBERNETES, getResourceName(kubernetesConfig, applicationInfo), kubernetesConfig,
-                    now, determineImagePullPolicy(kubernetesConfig, needToForceUpdateImagePullPolicy));
-            applyConfig(session, project, MINIKUBE, getResourceName(kubernetesConfig, applicationInfo), kubernetesConfig,
-                    now, ImagePullPolicy.IfNotPresent);
-            applyConfig(session, project, OPENSHIFT, getResourceName(openshiftConfig, applicationInfo), openshiftConfig, now,
-                    determineImagePullPolicy(openshiftConfig, needToForceUpdateImagePullPolicy));
-            applyConfig(session, project, KNATIVE, getResourceName(knativeConfig, applicationInfo), knativeConfig, now,
-                    determineImagePullPolicy(knativeConfig, needToForceUpdateImagePullPolicy));
-
-            applyKnativeConfig(session, project, getResourceName(knativeConfig, applicationInfo), knativeConfig);
-            //When S2i is disabled we need to pass that information to dekorate.
-            //Also we need to make sure that the alternatives (instances of ImageConfiguration)
-            //are properly configured.
-            if (!capabilities.isCapabilityPresent(Capabilities.CONTAINER_IMAGE_S2I)) {
-                session.configurators().add(new Configurator<ImageConfigurationFluent<?>>() {
-                    @Override
-                    public void visit(ImageConfigurationFluent<?> image) {
-                        containerImage.ifPresent(i -> {
-                            String group = ImageUtil.getRepository(i.getImage()).split("/")[0];
-                            image.withGroup(group);
-                            i.getRegistry().ifPresent(r -> {
-                                image.withRegistry(r);
-                            });
-                        });
-                    }
-                });
-
-                //JAVA_APP_JAR value is not compatible with our Dockerfiles, so its causing problems
-                session.resources().decorate(OPENSHIFT, new RemoveEnvVarDecorator("JAVA_APP_JAR"));
-                session.configurators().add(new Configurator<S2iBuildConfigFluent<?>>() {
-                    @Override
-                    public void visit(S2iBuildConfigFluent<?> s2i) {
-                        s2i.withEnabled(false);
-                    }
-                });
-            }
-            //apply build item configurations to the dekorate session.
-            applyBuildItems(session,
-                    applicationInfo,
-                    kubernetesConfig,
-                    openshiftConfig,
-                    knativeConfig,
-                    deploymentTargets,
-                    kubernetesAnnotations,
-                    kubernetesLabels,
-                    kubernetesEnvs,
-                    kubernetesRoles,
-                    kubernetesPorts,
-                    baseImage,
-                    containerImage,
-                    command,
-                    kubernetesHealthLivenessPath,
-                    kubernetesHealthReadinessPath);
-
-            // write the generated resources to the filesystem
-            generatedResourcesMap = session.close();
-
-            List<String> generatedFileNames = new ArrayList<>(generatedResourcesMap.size());
-            for (Map.Entry<String, String> resourceEntry : generatedResourcesMap.entrySet()) {
-                Path path = Paths.get(resourceEntry.getKey());
-                //We need to ignore the config yml
-                if (!path.toFile().getParentFile().getName().equals("dekorate")) {
+            resourceEntry.getKey().replace(root.toAbsolutePath().toString(), KUBERNETES);
+            if (fileName.endsWith(".yml") || fileName.endsWith(".json")) {
+                String target = fileName.substring(0, fileName.lastIndexOf("."));
+                if (!deploymentTargets.contains(target)) {
                     continue;
                 }
-                String fileName = path.toFile().getName();
-                Path targetPath = outputTarget.getOutputDirectory().resolve(KUBERNETES).resolve(fileName);
-                String relativePath = targetPath.toAbsolutePath().toString().replace(root.toAbsolutePath().toString(), "");
-
-                resourceEntry.getKey().replace(root.toAbsolutePath().toString(), KUBERNETES);
-                if (fileName.endsWith(".yml") || fileName.endsWith(".json")) {
-                    String target = fileName.substring(0, fileName.lastIndexOf("."));
-                    if (!deploymentTargets.contains(target)) {
-                        continue;
-                    }
-                }
-
-                generatedFileNames.add(fileName);
-                generatedResourceProducer.produce(
-                        new GeneratedFileSystemResourceBuildItem(
-                                // we need to make sure we are only passing the relative path to the build item
-                                relativePath,
-                                resourceEntry.getValue().getBytes(StandardCharsets.UTF_8)));
             }
 
-            if (!generatedFileNames.isEmpty()) {
-                log.infof("Generated the Kubernetes manifests: '%s' in '%s'", String.join(",", generatedFileNames),
-                        outputTarget.getOutputDirectory() + File.separator + KUBERNETES);
-            }
+            generatedFileNames.add(fileName);
+            generatedResourceProducer.produce(
+                    new GeneratedFileSystemResourceBuildItem(
+                            // we need to make sure we are only passing the relative path to the build item
+                            relativePath,
+                            resourceEntry.getValue().getBytes(StandardCharsets.UTF_8)));
+        }
 
-            try {
-                if (root != null && root.toFile().exists()) {
-                    FileUtil.deleteDirectory(root);
-                }
-            } catch (IOException e) {
-                log.debug("Unable to delete temporary directory " + root, e);
-            }
-        } catch (Exception e) {
-            if (launchMode.getLaunchMode() == LaunchMode.NORMAL) {
-                throw e;
-            }
+        if (!generatedFileNames.isEmpty()) {
+            log.infof("Generated the Kubernetes manifests: '%s' in '%s'", String.join(",", generatedFileNames),
+                    outputTarget.getOutputDirectory() + File.separator + KUBERNETES);
+        }
 
-            log.warn("Failed to generate Kubernetes resources", e);
+        try {
+            if (root != null && root.toFile().exists()) {
+                FileUtil.deleteDirectory(root);
+            }
+        } catch (IOException e) {
+            log.debug("Unable to delete temporary directory " + root, e);
         }
     }
 
@@ -468,11 +402,27 @@ class KubernetesProcessor {
             session.resources().decorate(OPENSHIFT, new AddLabelDecorator(new Label(OPENSHIFT_APP_RUNTIME, QUARKUS)));
         }
 
-        if (config.getNamespace().isPresent()) {
-            session.resources().decorate(target, new AddNamespaceDecorator(config.getNamespace().get()));
+        ScmInfo scm = project.getScmInfo();
+        String vcsUrl = scm != null ? scm.getUrl() : null;
+        String commitId = scm != null ? scm.getCommit() : null;
+
+        //Dekorate uses its own annotations. Let's replace them with the quarkus ones.
+        session.resources().decorate(target, new RemoveAnnotationDecorator(Annotations.VCS_URL));
+        session.resources().decorate(target, new RemoveAnnotationDecorator(Annotations.COMMIT_ID));
+        //Add quarkus vcs annotations
+        if (commitId != null) {
+            session.resources().decorate(target,
+                    new AddAnnotationDecorator(new Annotation(QUARKUS_ANNOTATIONS_COMMIT_ID, commitId)));
+        }
+        if (vcsUrl != null) {
+            session.resources().decorate(target,
+                    new AddAnnotationDecorator(new Annotation(QUARKUS_ANNOTATIONS_VCS_URL, vcsUrl)));
         }
 
-        applyAnnotations(session, project, target, config, now);
+        if (config.isAddBuildTimestamp()) {
+            session.resources().decorate(target, new AddAnnotationDecorator(new Annotation(QUARKUS_ANNOTATIONS_BUILD_TIMESTAMP,
+                    now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd - HH:mm:ss Z")))));
+        }
 
         config.getWorkingDir().ifPresent(w -> {
             session.resources().decorate(target, new ApplyWorkingDirDecorator(name, w));
@@ -542,31 +492,6 @@ class KubernetesProcessor {
         session.resources().decorate(target, new RemoveOptionalFromConfigMapKeySelectorDecorator());
     }
 
-    private void applyAnnotations(Session session, Project project, String target, PlatformConfiguration config,
-            ZonedDateTime now) {
-        ScmInfo scm = project.getScmInfo();
-        String vcsUrl = scm != null ? scm.getUrl() : null;
-        String commitId = scm != null ? scm.getCommit() : null;
-
-        //Dekorate uses its own annotations. Let's replace them with the quarkus ones.
-        session.resources().decorate(target, new RemoveAnnotationDecorator(Annotations.VCS_URL));
-        session.resources().decorate(target, new RemoveAnnotationDecorator(Annotations.COMMIT_ID));
-        //Add quarkus vcs annotations
-        if (commitId != null) {
-            session.resources().decorate(target,
-                    new AddAnnotationDecorator(new Annotation(QUARKUS_ANNOTATIONS_COMMIT_ID, commitId)));
-        }
-        if (vcsUrl != null) {
-            session.resources().decorate(target,
-                    new AddAnnotationDecorator(new Annotation(QUARKUS_ANNOTATIONS_VCS_URL, vcsUrl)));
-        }
-
-        if (config.isAddBuildTimestamp()) {
-            session.resources().decorate(target, new AddAnnotationDecorator(new Annotation(QUARKUS_ANNOTATIONS_BUILD_TIMESTAMP,
-                    now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd - HH:mm:ss Z")))));
-        }
-    }
-
     private void applyKnativeConfig(Session session, Project project, String name, KnativeConfig config) {
         if (config.clusterLocal) {
             session.resources().decorate(KNATIVE, new AddLabelDecorator(name,
@@ -574,56 +499,6 @@ class KubernetesProcessor {
                             .withKey("serving.knative.dev/visibility")
                             .withValue("cluster-local")
                             .build()));
-        }
-
-        config.minScale.ifPresent(min -> session.resources().decorate(KNATIVE, new ApplyMinScaleDecorator(name, min)));
-
-        config.maxScale.ifPresent(max -> session.resources().decorate(KNATIVE, new ApplyMaxScaleDecorator(name, max)));
-
-        config.revisionAutoScaling.autoScalerClass.map(AutoScalerClassConverter::convert)
-                .ifPresent(a -> session.resources().decorate(KNATIVE, new ApplyLocalAutoscalingClassDecorator(name, a)));
-
-        config.revisionAutoScaling.metric.map(AutoScalingMetricConverter::convert)
-                .ifPresent(m -> session.resources().decorate(KNATIVE, new ApplyLocalAutoscalingMetricDecorator(name, m)));
-
-        config.revisionAutoScaling.containerConcurrency
-                .ifPresent(c -> session.resources().decorate(KNATIVE, new ApplyLocalContainerConcurrencyDecorator(name, c)));
-
-        config.revisionAutoScaling.targetUtilizationPercentage
-                .ifPresent(t -> session.resources().decorate(KNATIVE,
-                        new ApplyLocalTargetUtilizationPercentageDecorator(name, t)));
-        config.revisionAutoScaling.target
-                .ifPresent(t -> session.resources().decorate(KNATIVE, new ApplyLocalAutoscalingTargetDecorator(name, t)));
-
-        config.globalAutoScaling.autoScalerClass
-                .map(AutoScalerClassConverter::convert)
-                .ifPresent(a -> {
-                    session.resources().decorate(new AddConfigMapResourceProvidingDecorator("config-autoscaler"));
-                    session.resources().decorate(new ApplyGlobalAutoscalingClassDecorator(a));
-                });
-
-        config.globalAutoScaling.containerConcurrency
-                .ifPresent(c -> {
-                    session.resources().decorate(new AddConfigMapResourceProvidingDecorator("config-defaults"));
-                    session.resources().decorate(new ApplyGlobalContainerConcurrencyDecorator(c));
-                });
-
-        config.globalAutoScaling.requestsPerSecond
-                .ifPresent(r -> {
-                    session.resources().decorate(new AddConfigMapResourceProvidingDecorator("config-autoscaler"));
-                    session.resources().decorate(new ApplyGlobalRequestsPerSecondTargetDecorator(r));
-                });
-
-        config.globalAutoScaling.targetUtilizationPercentage
-                .ifPresent(t -> {
-                    session.resources().decorate(new AddConfigMapResourceProvidingDecorator("config-autoscaler"));
-                    session.resources().decorate(new ApplyGlobalTargetUtilizationDecorator(t));
-                });
-
-        if (!config.scaleToZeroEnabled) {
-            session.resources().decorate(new AddConfigMapResourceProvidingDecorator("config-autoscaler"));
-            session.resources().decorate(new AddConfigMapDataDecorator("config-autoscaler", "enable-scale-to-zero",
-                    String.valueOf(config.scaleToZeroEnabled)));
         }
     }
 
@@ -773,8 +648,7 @@ class KubernetesProcessor {
         session.resources().decorate(KUBERNETES,
                 new ApplyServiceTypeDecorator(kubernetesName, kubernetesConfig.getServiceType().name()));
         if ((kubernetesConfig.getServiceType() == ServiceType.NodePort) && kubernetesConfig.nodePort.isPresent()) {
-            session.resources().decorate(KUBERNETES,
-                    new AddNodePortDecorator(openshiftName, kubernetesConfig.nodePort.getAsInt()));
+            session.resources().decorate(KUBERNETES, new AddNodePortDecorator(openshiftName, kubernetesConfig.nodePort.get()));
         }
         session.resources().decorate(MINIKUBE,
                 new ApplyServiceTypeDecorator(kubernetesName, ServiceType.NodePort.name()));
@@ -784,8 +658,7 @@ class KubernetesProcessor {
         session.resources().decorate(OPENSHIFT,
                 new ApplyServiceTypeDecorator(openshiftName, openshiftConfig.getServiceType().name()));
         if ((openshiftConfig.getServiceType() == ServiceType.NodePort) && openshiftConfig.nodePort.isPresent()) {
-            session.resources().decorate(OPENSHIFT,
-                    new AddNodePortDecorator(openshiftName, openshiftConfig.nodePort.getAsInt()));
+            session.resources().decorate(OPENSHIFT, new AddNodePortDecorator(openshiftName, openshiftConfig.nodePort.get()));
         }
 
         session.resources().decorate(KNATIVE,
@@ -847,10 +720,8 @@ class KubernetesProcessor {
         handleLivenessProbe(name, target, livenessProbe, kubernetesHealthLivenessPathBuildItem, session);
         handleReadinessProbe(name, target, readinessProbe, kubernetesHealthReadinessPathBuildItem,
                 session);
-
-        //For knative we want the port to be null
-        String port = KNATIVE.equals(target) ? null : String.valueOf(ports.getOrDefault(HTTP_PORT, DEFAULT_HTTP_PORT));
-        session.resources().decorate(target, new ApplyHttpGetActionPortDecorator(port));
+        session.resources().decorate(target,
+                new ApplyHttpGetActionPortDecorator(ports.getOrDefault(HTTP_PORT, DEFAULT_HTTP_PORT)));
     }
 
     private void handleLivenessProbe(String name, String target, ProbeConfig livenessProbe,
